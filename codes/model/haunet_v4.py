@@ -1,5 +1,6 @@
 """
-flops: 6.1829 G, params: 2.6326 M
+双分支:CAB+CA(通道注意力)
+flops: 6.6560G, params: 3.7419M
 """
 import torch
 import torch.nn as nn
@@ -301,6 +302,86 @@ class lateral_nafblock(nn.Module):  # CIM模块
         for qkv in self.qkv:
             outs=qkv(outs)
         return outs
+    
+class CA(nn.Module):
+    def __init__(self, c, reduction=16):
+        super().__init__()
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.conv_du = nn.Sequential(
+                nn.Conv2d(c, c // reduction, 1, padding=0, bias=True),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(c // reduction, c, 1, padding=0, bias=True),
+                nn.Sigmoid()
+        )
+    def forward(self, x):  # (32,64,32,32)
+        
+        y = self.avg_pool(x)  # (32,64,1,1)
+        y = self.conv_du(y)  # (32,64,1,1)
+        return x * y  # (32,64,32,32)   
+    
+class MMFU(nn.Module):
+    def __init__(self, c):
+        super().__init__()
+        # 1x1卷积
+        # print("c is: ",c)
+        self.conv = nn.Conv2d(3*c, c, kernel_size=1)
+        # 通道注意力
+        self.ca = CA(c)
+        pass
+    
+    def forward(self, x):
+        y = self.conv(x)
+        y = self.ca(y)
+        return y
+
+class lateral_nafblock_wjq(nn.Module): 
+    def __init__(self, c):
+        super().__init__()
+
+        self.MMFU_0 = MMFU(c)
+        self.MMFU_1 = MMFU(c)
+        self.MMFU_2 = MMFU(c)
+
+    def forward(self, encs):
+        enc0, enc1, enc2 = encs[0], encs[1], encs[2]
+        
+        outs = []
+
+        # 对encoder0进行处理
+        """
+        首先将enc1和enc2上采样,然后三个尺度进行cat,
+        再1x1卷积降维,最后使用一个通道注意力
+        """
+        enc1_0 = nn.Upsample(scale_factor=2)(enc1)
+        enc2_0 = nn.Upsample(scale_factor=4)(enc2)
+        y0 = torch.cat([enc0, enc1_0, enc2_0], dim=1)
+        out0 = self.MMFU_0(y0)
+        out0 = out0 + enc0
+        outs.append(out0)
+
+        # 对encoder1进行处理
+        """
+        首先将enc0下采样,enc2上采样
+        """
+        enc0_1 = nn.Upsample(scale_factor=0.5)(enc0)
+        enc2_1 = nn.Upsample(scale_factor=2)(enc2)
+        y1 = torch.cat([enc0_1, enc1, enc2_1], dim=1)
+        out1 = self.MMFU_1(y1)
+        out1 = out1 + enc1
+        outs.append(out1)
+
+        # 对encoder2 进行处理
+        """
+        首先将enc0, enc1进行下采样
+        """
+        enc0_2 = nn.Upsample(scale_factor=0.25)(enc0)
+        enc1_2 = nn.Upsample(scale_factor=0.5)(enc1)
+        y2 = torch.cat([enc0_2, enc1_2, enc2], dim=1)
+        out2 = self.MMFU_2(y2)
+        out2 = out2 + enc2
+        outs.append(out2)
+
+        return outs
 
 class S_CEMBlock(nn.Module):
     def __init__(self, c, DW_Expand=2,num_heads=3, FFN_Expand=2, drop_out_rate=0.):
@@ -385,6 +466,92 @@ class S_CEMBlock(nn.Module):
         xs = self.dropout1(xs)
 
         y = inp + xc * self.beta+ xs * self.beta2  # 加和
+
+        x = self.conv4(self.norm2(y))
+        x = self.sg(x)
+        x = self.conv5(x)
+
+        x = self.dropout2(x)
+
+        return y + x * self.gamma
+    
+class CAB(nn.Module):
+    def __init__(self, c, compress_ratio=3, reduction=16):
+        super(CAB, self).__init__()
+
+        self.cab = nn.Sequential(
+            nn.Conv2d(c, c//compress_ratio, 3, 1, 1),
+            nn.GELU(),
+            nn.Conv2d(c // compress_ratio, c, 3, 1, 1),
+            CA(c)
+        )
+    def forward(self, x):
+        return self.cab(x)
+
+
+class S_CEMBlock_wjq(nn.Module):
+    def __init__(self, c, DW_Expand=2, num_heads=3, FFN_Expand=2, drop_out_rate=0.):
+        super().__init__()
+        self.num_heads = num_heads
+
+        self.norm1 = LayerNorm2d(c)  # 第一个layernorm
+
+        # SAB
+        self.qkv = nn.Conv2d(c, c*3, kernel_size=1) # 1x1卷积升
+        self.qkv_dwconv = nn.Conv2d(c*3, c*3, kernel_size=3, stride=1, padding=1, groups=c*3)
+        self.temperature = nn.Parameter(torch.ones(num_heads, 1, 1))
+        self.relu = nn.ReLU()
+        self.softmax = nn.Softmax(dim=-1)
+        # CA
+        self.cab = CAB(c)
+
+        # SAB和CAB的两个系数
+        self.dropout1 = nn.Dropout(drop_out_rate) if drop_out_rate >0. else nn.Identity()
+        self.dropout2 = nn.Dropout(drop_out_rate) if drop_out_rate >0. else nn.Identity()
+        self.beta = nn.Parameter(torch.zeros((1, c, 1, 1)), requires_grad=True)
+        self.beta2 = nn.Parameter(torch.zeros((1, c, 1, 1)), requires_grad=True)
+       
+        self.norm2 = LayerNorm2d(c)  # 第二个LayerNorm
+        ffn_channel = FFN_Expand * c
+        self.conv4 = nn.Conv2d(c, ffn_channel, kernel_size=1, padding=0, stride=1, groups=1, bias=True)
+        self.sg = SimpleGate()
+        self.conv5 = nn.Conv2d(ffn_channel//2, c, kernel_size=1, padding=0, stride=1, groups=1, bias=True)
+        self.gamma = nn.Parameter(torch.zeros((1, c, 1, 1)), requires_grad=True)
+        pass
+
+    def forward(self, inp):
+        x = inp
+        x = self.norm1(x)
+
+        # 通道注意力
+        outca = self.cab(x)
+        
+        b, c, h, w = x.shape
+        
+        qkv = self.qkv_dwconv(self.qkv(x))
+        q, k, v = qkv.chunk(3, dim=1)  # 通道维数一分为三
+        q = rearrange(q, 'b (head c) h w -> b head c (h w)', head=self.num_heads)  # 通道注意力
+        k = rearrange(k, 'b (head c) h w -> b head c (h w)', head=self.num_heads)
+        v = rearrange(v, 'b (head c) h w -> b head c (h w)', head=self.num_heads)
+        qs = q.clone().permute(0, 1, 3, 2)  # 空间注意力
+        ks = k.clone().permute(0, 1, 3, 2)
+        vs = v.clone().permute(0, 1, 3, 2)
+
+        q = torch.nn.functional.normalize(q, dim=-1)
+        k = torch.nn.functional.normalize(k, dim=-1)
+
+        attn = (q @ k.transpose(-2, -1)) * self.temperature
+        attn = self.relu(attn)
+        attn = self.softmax(attn)
+
+        outc= (attn @ v)
+        outc = rearrange(outc, 'b head c (h w) -> b (head c) h w', head=self.num_heads, h=h, w=w)
+        # outc = rearrange(outc, 'b head c (h w) -> b (head c) h w', head=self.num_heads, h=h, w=w)
+
+        xc = self.dropout1(outc)
+        xca = self.dropout2(outca)
+
+        y = inp + xc * self.beta + xca * self.beta2 
 
         x = self.conv4(self.norm2(y))
         x = self.sg(x)
@@ -499,27 +666,27 @@ class HAUNet(nn.Module):
             if numii < 1:
                 self.encoders.append(
                     nn.Sequential(
-                        *[S_CEMBlock(chan, num_heads=heads[ii]) for _ in range(num)]
+                        *[S_CEMBlock_wjq(chan, num_heads=heads[ii]) for _ in range(num)]
                     )
                 )
             else:
                 self.encoders.append(
                     nn.Sequential(
-                        *[CEMBlock(chan, num_heads=heads[ii]) for _ in range(num)]
+                        *[S_CEMBlock_wjq(chan, num_heads=heads[ii]) for _ in range(num)]
                     )
                 )
             self.downs.append(
                 nn.Conv2d(chan, chan, 2, 2)
             )
             ii+=1
-        self.lateral_nafblock = lateral_nafblock(chan)
+        self.lateral_nafblock = lateral_nafblock_wjq(chan)
         self.enc_middle_blks = \
             nn.Sequential(
-                *[CEMBlock(chan, num_heads=heads[ii]) for _ in range(middle_blk_num // 2)]
+                *[S_CEMBlock_wjq(chan, num_heads=heads[ii]) for _ in range(middle_blk_num // 2)]
             )
         self.dec_middle_blks = \
             nn.Sequential(
-                *[CEMBlock(chan, num_heads=heads[ii]) for _ in range(middle_blk_num // 2)]
+                *[S_CEMBlock_wjq(chan, num_heads=heads[ii]) for _ in range(middle_blk_num // 2)]
             )
         ii=0
         for numii in range(len(dec_blk_nums)):
@@ -533,13 +700,13 @@ class HAUNet(nn.Module):
             if numii < 1:
                 self.decoders.append(
                     nn.Sequential(
-                        *[CEMBlock(chan, num_heads=heads[1 - ii]) for _ in range(num)]
+                        *[S_CEMBlock_wjq(chan, num_heads=heads[1 - ii]) for _ in range(num)]
                     )
                 )
             else:
                 self.decoders.append(
                     nn.Sequential(
-                        *[S_CEMBlock(chan, num_heads=heads[1 - ii]) for _ in range(num)]
+                        *[S_CEMBlock_wjq(chan, num_heads=heads[1 - ii]) for _ in range(num)]
                     )
                 )
             ii += 1
@@ -639,7 +806,7 @@ if __name__ == '__main__':
     # 获取模型最大内存消耗
     max_memory_reserved = torch.cuda.max_memory_reserved(device='cuda') / (1024 ** 2)
 
-    print(f"模型最大内存消耗: {max_memory_reserved:.2f} MB") # 1 MB = 1020 KB  1KB = 1024B 1 B= 8bit
+    print(f"模型最大内存消耗: {max_memory_reserved:.2f} MB")
     flops, params = profile(net, (x,))
     print('flops: %.4f G, params: %.4f M' % (flops / 1e9, params / 1000000.0))
     net = net.cuda()
@@ -651,4 +818,3 @@ if __name__ == '__main__':
         y = net(x)
         timer.toc()
     print('Do once forward need {:.3f}ms '.format(timer.total_time * 1000 / 100.0))
-

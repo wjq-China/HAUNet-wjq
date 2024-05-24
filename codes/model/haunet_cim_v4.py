@@ -1,5 +1,6 @@
 """
-flops: 6.1829 G, params: 2.6326 M
+使用MMFU替代CIM连接
+flops: 5.0543 G, params: 2.4141 M
 """
 import torch
 import torch.nn as nn
@@ -301,6 +302,88 @@ class lateral_nafblock(nn.Module):  # CIM模块
         for qkv in self.qkv:
             outs=qkv(outs)
         return outs
+    
+class CA(nn.Module):
+    def __init__(self, c, reduction=16):
+        super().__init__()
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.conv_du = nn.Sequential(
+                nn.Conv2d(c, c // reduction, 1, padding=0, bias=True),
+                nn.ReLU(inplace=True),
+                nn.Conv2d(c // reduction, c, 1, padding=0, bias=True),
+                nn.Sigmoid()
+        )
+    def forward(self, x):  # (32,64,32,32)
+        
+        y = self.avg_pool(x)  # (32,64,1,1)
+        y = self.conv_du(y)  # (32,64,1,1)
+        return x * y  # (32,64,32,32)   
+    
+class MMFU(nn.Module):
+    def __init__(self, c):
+        super().__init__()
+        # 1x1卷积
+        # print("c is: ",c)
+        self.conv = nn.Conv2d(3*c, c, kernel_size=1)
+        # 通道注意力
+        self.ca = CA(c)
+        pass
+    
+    def forward(self, x):
+        y = self.conv(x)
+        y = self.ca(y)
+        return y
+
+class lateral_nafblock_wjq(nn.Module): 
+    def __init__(self, c):
+        super().__init__()
+
+        self.MMFU_0 = MMFU(c)
+        self.MMFU_1 = MMFU(c)
+        self.MMFU_2 = MMFU(c)
+
+    def forward(self, encs):
+        enc0, enc1, enc2 = encs[0], encs[1], encs[2]
+        
+        outs = []
+
+        # 对encoder0进行处理
+        """
+        首先将enc1和enc2上采样,然后三个尺度进行cat,
+        再1x1卷积降维,最后使用一个通道注意力
+        """
+        enc1_0 = nn.Upsample(scale_factor=2)(enc1)
+        enc2_0 = nn.Upsample(scale_factor=4)(enc2)
+        y0 = torch.cat([enc0, enc1_0, enc2_0], dim=1)
+        out0 = self.MMFU_0(y0)
+        out0 = out0 + enc0
+        outs.append(out0)
+
+        # 对encoder1进行处理
+        """
+        首先将enc0下采样,enc2上采样
+        """
+        enc0_1 = nn.Upsample(scale_factor=0.5)(enc0)
+        enc2_1 = nn.Upsample(scale_factor=2)(enc2)
+        y1 = torch.cat([enc0_1, enc1, enc2_1], dim=1)
+        out1 = self.MMFU_1(y1)
+        out1 = out1 + enc1
+        outs.append(out1)
+
+        # 对encoder2 进行处理
+        """
+        首先将enc0, enc1进行下采样
+        """
+        enc0_2 = nn.Upsample(scale_factor=0.25)(enc0)
+        enc1_2 = nn.Upsample(scale_factor=0.5)(enc1)
+        y2 = torch.cat([enc0_2, enc1_2, enc2], dim=1)
+        out2 = self.MMFU_2(y2)
+        out2 = out2 + enc2
+        outs.append(out2)
+
+        return outs
+
+
 
 class S_CEMBlock(nn.Module):
     def __init__(self, c, DW_Expand=2,num_heads=3, FFN_Expand=2, drop_out_rate=0.):
@@ -512,7 +595,7 @@ class HAUNet(nn.Module):
                 nn.Conv2d(chan, chan, 2, 2)
             )
             ii+=1
-        self.lateral_nafblock = lateral_nafblock(chan)
+        self.lateral_nafblock = lateral_nafblock_wjq(chan)
         self.enc_middle_blks = \
             nn.Sequential(
                 *[CEMBlock(chan, num_heads=heads[ii]) for _ in range(middle_blk_num // 2)]
@@ -639,7 +722,7 @@ if __name__ == '__main__':
     # 获取模型最大内存消耗
     max_memory_reserved = torch.cuda.max_memory_reserved(device='cuda') / (1024 ** 2)
 
-    print(f"模型最大内存消耗: {max_memory_reserved:.2f} MB") # 1 MB = 1020 KB  1KB = 1024B 1 B= 8bit
+    print(f"模型最大内存消耗: {max_memory_reserved:.2f} MB")
     flops, params = profile(net, (x,))
     print('flops: %.4f G, params: %.4f M' % (flops / 1e9, params / 1000000.0))
     net = net.cuda()

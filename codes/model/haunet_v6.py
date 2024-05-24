@@ -288,6 +288,7 @@ class qkvblock(nn.Module):
         outs.append(out1)
         outs.append(out2)
         return outs
+    
 
 class lateral_nafblock(nn.Module):  # CIM模块
     def __init__(self, c, num_heads=3,num_block=1):
@@ -301,6 +302,8 @@ class lateral_nafblock(nn.Module):  # CIM模块
         for qkv in self.qkv:
             outs=qkv(outs)
         return outs
+    
+
 
 class S_CEMBlock(nn.Module):
     def __init__(self, c, DW_Expand=2,num_heads=3, FFN_Expand=2, drop_out_rate=0.):
@@ -466,6 +469,7 @@ class CEMBlock(nn.Module):
         x = self.dropout2(x)
 
         return y + x * self.gamma
+    
 class HAUNet(nn.Module):
 
     def __init__(self, up_scale=4, img_channel=3, width=180, middle_blk_num=10, enc_blk_nums=[5,5], dec_blk_nums=[5,5], heads = [1,2,4],):
@@ -651,4 +655,3 @@ if __name__ == '__main__':
         y = net(x)
         timer.toc()
     print('Do once forward need {:.3f}ms '.format(timer.total_time * 1000 / 100.0))
-

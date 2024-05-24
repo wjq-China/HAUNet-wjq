@@ -1,5 +1,6 @@
 """
-flops: 6.1829 G, params: 2.6326 M
+去掉CIM连接
+flops: 4.9052 G, params: 2.3271 M
 """
 import torch
 import torch.nn as nn
@@ -565,7 +566,9 @@ class HAUNet(nn.Module):
 
         x = self.enc_middle_blks(x)    # 第三个encoder
         encs.append(x)  # 三个encoder的输出
-        outs = self.lateral_nafblock(encs)
+        # 修改输出
+        # outs = self.lateral_nafblock(encs)
+        outs = encs
         x = outs[-1]
         x = self.dec_middle_blks(x)
         outs2 = outs[:2]
@@ -639,7 +642,7 @@ if __name__ == '__main__':
     # 获取模型最大内存消耗
     max_memory_reserved = torch.cuda.max_memory_reserved(device='cuda') / (1024 ** 2)
 
-    print(f"模型最大内存消耗: {max_memory_reserved:.2f} MB") # 1 MB = 1020 KB  1KB = 1024B 1 B= 8bit
+    print(f"模型最大内存消耗: {max_memory_reserved:.2f} MB")
     flops, params = profile(net, (x,))
     print('flops: %.4f G, params: %.4f M' % (flops / 1e9, params / 1000000.0))
     net = net.cuda()

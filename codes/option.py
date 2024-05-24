@@ -3,9 +3,6 @@ import argparse
 
 parser = argparse.ArgumentParser(description='Super-resolution')
 
-parser.add_argument("--project_name",type=str, default='SR',
-                    help='wandb project name')
-
 parser.add_argument('--debug', action='store_true', default=False,
                     help='Enables debug mode')
 
@@ -100,7 +97,7 @@ parser.add_argument('--test_metric', type=str, default='psnr',
                     help='for best model selection in test phase (psnr, ssim)')
 
 # optimization specifications
-parser.add_argument('--lr', type=float, default=8e-4,
+parser.add_argument('--lr', type=float, default=11e-4,
                     help='learning rate')
 parser.add_argument('--eta_min', type=float, default=1e-7,
                     help='learning rate')  # 最小的学习率
