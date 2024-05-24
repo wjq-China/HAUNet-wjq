@@ -71,8 +71,8 @@ class checkpoint():
         if args.save == '.':
             args.save = now
         else:
-            self.dir = '/home/wjq/wjqHD/RSISR/HAUNet-wjq/experiment/' + args.save
-            # self.dir ='G:\proj\chaofen/final_proj\experiment\ournet'
+            # self.dir = '/root/autodl-tmp/experiment/' + args.save
+            self.dir ='/home/wjq/wjqHD/RSISR/HAUNet-wjq/experiment/' + args.save
 
         if args.resume == 1:  # 从中断中开始训练
             self.log = torch.load(self.dir + '/psnr_log.pt')

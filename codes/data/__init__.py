@@ -5,12 +5,20 @@ def create_dataloaders(args):
     """create dataloader"""
     if args.dataset == 'AID':
         from data.aid import AIDataset
-        training_set = AIDataset(args, root_dir='/home/wjq/wjqHD/RSISR/datasets/HAUNet/AID-dataset/train',
+        training_set = AIDataset(args, root_dir='G:\datasets\yaogan\dataset\AID-dataset/train',
                                  train=True)
-        val_set = AIDataset(args, root_dir='/home/wjq/wjqHD/RSISR/datasets/HAUNet/AID-dataset/val',
+        val_set = AIDataset(args, root_dir='G:\datasets\yaogan\dataset\AID-dataset/val',
                             train=False)
-        test_set = AIDataset(args, root_dir='/home/wjq/wjqHD/RSISR/datasets/HAUNet/AID-dataset/val',
+        test_set = AIDataset(args, root_dir='G:\datasets\yaogan\dataset/AID-dataset/val',
                                    train=False)
+    # elif args.dataset == 'UCMerced':
+    #     from data.ucmerced import UCMercedDataset
+    #     training_set = UCMercedDataset(args, root_dir='/root/autodl-tmp/datasets/HAUNet/UCMerced-dataset/train',
+    #                              train=True)
+    #     val_set = UCMercedDataset(args, root_dir='/root/autodl-tmp/datasets/HAUNet/UCMerced-dataset/val',
+    #                         train=False)
+    #     test_set = UCMercedDataset(args, root_dir='/root/autodl-tmp/datasets/HAUNet/UCMerced-dataset/val',
+    #                               train=False)
     elif args.dataset == 'UCMerced':
         from data.ucmerced import UCMercedDataset
         training_set = UCMercedDataset(args, root_dir='/home/wjq/wjqHD/RSISR/datasets/HAUNet/UCMerced-dataset/train',

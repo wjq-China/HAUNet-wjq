@@ -3,9 +3,6 @@ import argparse
 
 parser = argparse.ArgumentParser(description='Super-resolution')
 
-parser.add_argument("--project_name",type=str, default='SR',
-                    help='wandb project name')
-
 parser.add_argument('--debug', action='store_true', default=False,
                     help='Enables debug mode')
 

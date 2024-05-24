@@ -147,13 +147,6 @@ class Reconstruct(nn.Module):
         return x
 class qkvblock(nn.Module):  
     def __init__(self, c, num_heads=2, FFN_Expand=2):
-        """_summary_
-
-        Args:
-            c (_type_): _description_
-            num_heads (int, optional): _description_. Defaults to 2.
-            FFN_Expand (int, optional): _description_. Defaults to 2.
-        """
         super().__init__()
         self.num_heads = num_heads
         self.kv = nn.Conv2d(c * 3, c * 6, kernel_size=1)
@@ -286,9 +279,8 @@ class qkvblock(nn.Module):
         outs.append(out1)
         outs.append(out2)
         return outs
-
 class lateral_nafblock(nn.Module):  # CIM模块
-    def __init__(self, c, num_heads=3,num_block=1):
+    def __init__(self, c,num_heads=3,num_block=1):
         super().__init__()
         self.num_heads=num_heads
         self.qkv=nn.Sequential(
@@ -299,18 +291,68 @@ class lateral_nafblock(nn.Module):  # CIM模块
         for qkv in self.qkv:
             outs=qkv(outs)
         return outs
+    
+class wjq_lateral_nafblock(nn.Module): # wjq的CIM模块
+    def __init__(self, c):
+        self.e2_conv1x1 = nn.Conv2d(c, c//2, kernel_size=1)
+        self.e1_conv1x1 = nn.Conv2d(c, c//2, kernel_size=1)
+        self.fuse21 = nn.Conv2d(c, c//2, kernel_size=1)
+        self.e0_conv1x1 = nn.Conv2d(c, c//2, kernel_size=1)
+        self.fuse10 = nn.Conv2d(c, c//2, kernel_size=1)
+        self.act = nn.ReLU(inplace=True)
+
+    def forward(self, encs):
+        enc0 = encs[0] # 第一个encoder
+        enc1= nn.Upsample(scale_factor=2)(encs[1]) # 第二个encoder
+        enc2= nn.Upsample(scale_factor=4)(encs[2]) # 第三个encoder
+
+        enc2 = self.act(self.e2_conv1x1(enc2))  # 通道减半
+        enc1 = self.act(self.e1_conv1x1(enc1))  # 通道减半
+        out1 = torch.cat([enc2, enc1], dim=1)  # 拼接
+
+        fuse21 = self.fuse21(out1)
+
+        enc0 = self.e0_conv1x1(enc0)
+        out0 = torch.cat([fuse21, enc0], dim=1)  # 拼接
+
+
+        out1 = nn.Upsample(scale_factor=0.5)(out1) 
+        # out2 = nn.Upsample(scale_factor=0.25)(out2)
+        out2 = encs[2]
+
+        outs = []
+        outs.append(out0)
+        outs.append(out1)
+        outs.append(out2)
+
+        return outs
+
+class BFModule(nn.Module):
+    def __init__(self, num_fea):
+        super(BFModule, self).__init__()
+        self.conv4 = nn.Conv2d(num_fea, num_fea//2, 1, 1, 0)
+        self.conv3 = nn.Conv2d(num_fea, num_fea//2, 1, 1, 0)
+        self.fuse43 = nn.Conv2d(num_fea, num_fea//2, 1, 1, 0)
+        self.conv2 = nn.Conv2d(num_fea, num_fea//2, 1, 1,0)        
+        self.fuse32 = nn.Conv2d(num_fea, num_fea//2, 1, 1, 0)
+        self.conv1 = nn.Conv2d(num_fea, num_fea//2, 1, 1, 0)
+
+        self.act = nn.ReLU(inplace=True)
+
+    def forward(self, x_list):
+        H4 = self.act(self.conv4(x_list[3]))
+        H3_half = self.act(self.conv3(x_list[2]))
+        H3 = self.fuse43(torch.cat([H4, H3_half], dim=1))      
+        H2_half = self.act(self.conv2(x_list[1]))
+        H2 = self.fuse32(torch.cat([H3, H2_half], dim=1))
+        H1_half = self.act(self.conv1(x_list[0]))
+        H1 = torch.cat([H2, H1_half], dim=1)
+
+        return H1
+
 
 class S_CEMBlock(nn.Module):
     def __init__(self, c, DW_Expand=2,num_heads=3, FFN_Expand=2, drop_out_rate=0.):
-        """S-CEM模块
-
-        Args:
-            c (_type_): _description_
-            DW_Expand (int, optional): _description_. Defaults to 2.
-            num_heads (int, optional): _description_. Defaults to 3.
-            FFN_Expand (int, optional): _description_. Defaults to 2.
-            drop_out_rate (_type_, optional): _description_. Defaults to 0..
-        """
         super().__init__()
         self.num_heads = num_heads
 
@@ -344,15 +386,15 @@ class S_CEMBlock(nn.Module):
 
     def forward(self, inp):
         x = inp
-        x = self.norm1(x)  # layernorm
+        x = self.norm1(x)
         b, c, h, w = x.shape
         qkv = self.qkv_dwconv(self.qkv(x))
         q, k, v = qkv.chunk(3, dim=1)  # 沿1轴切分为3块
 
-        q = rearrange(q, 'b (head c) h w -> b head c (h w)', head=self.num_heads)  # 通道注意力
+        q = rearrange(q, 'b (head c) h w -> b head c (h w)', head=self.num_heads)
         k = rearrange(k, 'b (head c) h w -> b head c (h w)', head=self.num_heads)
         v = rearrange(v, 'b (head c) h w -> b head c (h w)', head=self.num_heads)
-        qs = q.clone().permute(0, 1, 3, 2)  # 空间注意力
+        qs = q.clone().permute(0, 1, 3, 2)
         ks = k.clone().permute(0, 1, 3, 2)
         vs = v.clone().permute(0, 1, 3, 2)
 
@@ -363,7 +405,7 @@ class S_CEMBlock(nn.Module):
         attn=self.relu(attn)
         attn = self.softmax(attn)
 
-        outc = (attn @ v)  # 通道注意力的输出
+        outc = (attn @ v)
 
         qs = torch.nn.functional.normalize(qs, dim=-1)
         ks = torch.nn.functional.normalize(ks, dim=-1)
@@ -372,7 +414,7 @@ class S_CEMBlock(nn.Module):
         attns=self.relu(attns)
         attns = self.softmax(attns)
         outs = (attns @ vs)
-        outs = outs.permute(0, 1, 3, 2)  # 空间注意力的输出
+        outs = outs.permute(0, 1, 3, 2)
 
         outc = rearrange(outc, 'b head c (h w) -> b (head c) h w', head=self.num_heads, h=h, w=w)
         outs = rearrange(outs, 'b head c (h w) -> b (head c) h w', head=self.num_heads, h=h, w=w)
@@ -394,15 +436,6 @@ class S_CEMBlock(nn.Module):
 
 class CEMBlock(nn.Module):
     def __init__(self, c, DW_Expand=2,num_heads=3, FFN_Expand=2, drop_out_rate=0.):
-        """_summary_
-
-        Args:
-            c (_type_): _description_
-            DW_Expand (int, optional): _description_. Defaults to 2.
-            num_heads (int, optional): _description_. Defaults to 3.
-            FFN_Expand (int, optional): _description_. Defaults to 2.
-            drop_out_rate (_type_, optional): _description_. Defaults to 0..
-        """
         super().__init__()
         self.num_heads = num_heads
 
@@ -467,17 +500,6 @@ class CEMBlock(nn.Module):
 class HAUNet(nn.Module):
 
     def __init__(self, up_scale=4, img_channel=3, width=180, middle_blk_num=10, enc_blk_nums=[5,5], dec_blk_nums=[5,5], heads = [1,2,4],):
-        """_summary_
-
-        Args:
-            up_scale (int, optional): 放大倍数. Defaults to 4.
-            img_channel (int, optional): 输入通道数. Defaults to 3.
-            width (int, optional): _description_. encoder和decoder的通道个数 to 180. 实际传入的是96
-            middle_blk_num (int, optional): _description_. Defaults to 10.
-            enc_blk_nums (list, optional): 单个encoder里blocks的个数为5. Defaults to [5,5].
-            dec_blk_nums (list, optional): 单个decoder里blocks的个数为5. Defaults to [5,5].
-            heads (list, optional): _description_. Defaults to [1,2,4].
-        """
         super().__init__()
 
         self.intro = nn.Conv2d(in_channels=img_channel, out_channels=width, kernel_size=3, padding=1, stride=1,
@@ -510,7 +532,7 @@ class HAUNet(nn.Module):
                 nn.Conv2d(chan, chan, 2, 2)
             )
             ii+=1
-        self.lateral_nafblock = lateral_nafblock(chan)
+        self.wjq_lateral_nafblock = lateral_nafblock(chan)
         self.enc_middle_blks = \
             nn.Sequential(
                 *[CEMBlock(chan, num_heads=heads[ii]) for _ in range(middle_blk_num // 2)]
@@ -558,12 +580,12 @@ class HAUNet(nn.Module):
 
         for encoder, down in zip(self.encoders, self.downs):
             x = encoder(x)
-            encs.append(x)  # Encoder的输出结果存起来
+            encs.append(x)
             x = down(x)
 
-        x = self.enc_middle_blks(x)    # 第三个encoder
-        encs.append(x)  # 三个encoder的输出
-        outs = self.lateral_nafblock(encs)
+        x = self.enc_middle_blks(x)
+        encs.append(x)
+        outs = self.wjq_lateral_nafblock(encs) 
         x = outs[-1]
         x = self.dec_middle_blks(x)
         outs2 = outs[:2]
@@ -571,7 +593,7 @@ class HAUNet(nn.Module):
             x = up(x)
             x = x + enc_skip
             x = decoder(x)
-        
+
         x = self.up(x)
         x = x + inp_hr
 
@@ -630,9 +652,9 @@ def print_network(net):
 if __name__ == '__main__':
     import time
     from thop import profile
-    net = HAUNet(up_scale=4, width=96, enc_blk_nums=[5,5],dec_blk_nums=[5,5],middle_blk_num=10).cuda()
+    net = HAUNet(up_scale=2, width=96, enc_blk_nums=[5,5],dec_blk_nums=[5,5],middle_blk_num=10).cuda()
     torch.cuda.reset_max_memory_allocated()
-    x = torch.rand(1, 3, 64, 64).cuda()
+    x = torch.rand(1, 3, 16, 16).cuda()
     y = net(x)
     # 获取模型最大内存消耗
     max_memory_reserved = torch.cuda.max_memory_reserved(device='cuda') / (1024 ** 2)
