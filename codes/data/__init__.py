@@ -13,11 +13,11 @@ def create_dataloaders(args):
                                    train=False)
     elif args.dataset == 'UCMerced':
         from data.ucmerced import UCMercedDataset
-        training_set = UCMercedDataset(args, root_dir='/root/autodl-tmp/datasets/HAUNet/UCMerced-dataset/train',
+        training_set = UCMercedDataset(args, root_dir='/root/autodl-tmp/datasets/UCMerced-dataset-haunet/train',
                                  train=True)
-        val_set = UCMercedDataset(args, root_dir='/root/autodl-tmp/datasets/HAUNet/UCMerced-dataset/val',
+        val_set = UCMercedDataset(args, root_dir='/root/autodl-tmp/datasets/UCMerced-dataset-haunet/val',
                             train=False)
-        test_set = UCMercedDataset(args, root_dir='/root/autodl-tmp/datasets/HAUNet/UCMerced-dataset/val',
+        test_set = UCMercedDataset(args, root_dir='/root/autodl-tmp/datasets/UCMerced-dataset-haunet/val',
                                   train=False)
     # elif args.dataset == 'UCMerced':
     #     from data.ucmerced import UCMercedDataset

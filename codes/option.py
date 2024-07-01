@@ -7,7 +7,7 @@ parser.add_argument('--debug', action='store_true', default=False,
                     help='Enables debug mode')
 
 # hardware specifications
-parser.add_argument('--n_threads', type=int, default=8,
+parser.add_argument('--n_threads', type=int, default=32,
                     help='number of threads for data loading')
 parser.add_argument('--cpu', action='store_true', default=False,
                     help='use cpu only')
@@ -96,7 +96,7 @@ parser.add_argument('--test_only', action='store_true', default=False,
 parser.add_argument('--test_metric', type=str, default='psnr',
                     help='for best model selection in test phase (psnr, ssim)')
 
-# optimization specifications
+# optimization specifications  
 parser.add_argument('--lr', type=float, default=11e-4,
                     help='learning rate')
 parser.add_argument('--eta_min', type=float, default=1e-7,
